@@ -20,7 +20,6 @@ import (
 	dbm "github.com/cosmos/cosmos-db"
 	cosmosevmhd "github.com/cosmos/evm/crypto/hd"
 	cosmosevmkeyring "github.com/cosmos/evm/crypto/keyring"
-	cosmosevmserverconfig "github.com/cosmos/evm/server/config"
 	"github.com/moziOrg/interstellar-chain/interstellar"
 	"github.com/moziOrg/interstellar-chain/interstellar/config"
 	customnetwork "github.com/moziOrg/interstellar-chain/interstellar/tests/network"
@@ -332,21 +331,16 @@ func initTestnetFiles(
 	nodeIDs := make([]string, args.numValidators)
 	valPubKeys := make([]cryptotypes.PubKey, args.numValidators)
 
-	appConfig := srvconfig.DefaultConfig()
-	appConfig.MinGasPrices = args.minGasPrices
-	appConfig.API.Enable = true
-	appConfig.Telemetry.Enabled = true
-	appConfig.Telemetry.PrometheusRetentionTime = 60
-	appConfig.Telemetry.EnableHostnameLabel = false
-	appConfig.Telemetry.GlobalLabels = [][]string{{"chain_id", args.chainID}}
-	evm := cosmosevmserverconfig.DefaultEVMConfig()
-	evm.EVMChainID = interstellar.EVMChainIDForChainID(args.chainID)
-	evmCfg := config.EVMAppConfig{
-		Config:  *appConfig,
-		EVM:     *evm,
-		JSONRPC: *cosmosevmserverconfig.DefaultJSONRPCConfig(),
-		TLS:     *cosmosevmserverconfig.DefaultTLSConfig(),
-	}
+	// Generated validator homes must use the same durable state and snapshot
+	// defaults as a node initialized with --node-mode val.
+	_, appConfig := config.InitAppConfig(testDenom, interstellar.EVMChainIDForChainID(args.chainID), interstellar.NodeModeVal)
+	evmCfg := appConfig.(config.EVMAppConfig)
+	evmCfg.MinGasPrices = args.minGasPrices
+	evmCfg.API.Enable = true
+	evmCfg.Telemetry.Enabled = true
+	evmCfg.Telemetry.PrometheusRetentionTime = 60
+	evmCfg.Telemetry.EnableHostnameLabel = false
+	evmCfg.Telemetry.GlobalLabels = [][]string{{"chain_id", args.chainID}}
 
 	var (
 		genAccounts []authtypes.GenesisAccount
@@ -495,7 +489,7 @@ func initTestnetFiles(
 			sdk.NewCoin(sdk.DefaultBondDenom, valTokens),
 			stakingtypes.NewDescription(nodeDirName, "", "", "", ""),
 			stakingtypes.NewCommissionRates(math.LegacyZeroDec(), math.LegacyOneDec(), math.LegacyOneDec()),
-			math.OneInt(),
+			interstellar.MinimumValidatorSelfDelegation,
 		)
 		if err != nil {
 			return err

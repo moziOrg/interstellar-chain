@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/x/authz"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 )
 
@@ -26,8 +27,10 @@ type validatorAdmissionBankKeeper interface {
 }
 
 // ValidatorAdmissionAnteHandler requires a 500,000 HUGE self-delegation and
-// atomically locks 1,000 HUGE in DEAD_ADDRESS for every validator creation.
-// The automatic transfer preserves the standard staking create-validator CLI.
+// minimum persistent self-delegation, and atomically locks 1,000 HUGE in
+// DEAD_ADDRESS for every validator creation. Authz-wrapped creation messages
+// are subject to the same requirements. The automatic transfer preserves the
+// standard staking create-validator CLI.
 func ValidatorAdmissionAnteHandler(bankKeeper validatorAdmissionBankKeeper, next sdk.AnteHandler) sdk.AnteHandler {
 	return func(ctx sdk.Context, tx sdk.Tx, simulate bool) (sdk.Context, error) {
 		creators, err := validatorCreationRequirements(tx.GetMsgs())
@@ -58,12 +61,30 @@ func ValidatorAdmissionAnteHandler(bankKeeper validatorAdmissionBankKeeper, next
 func validatorCreationRequirements(msgs []sdk.Msg) (map[string]int, error) {
 	creators := make(map[string]int)
 	for _, msg := range msgs {
+		if exec, ok := msg.(*authz.MsgExec); ok {
+			wrapped, err := exec.GetMessages()
+			if err != nil {
+				return nil, fmt.Errorf("unpack authz messages: %w", err)
+			}
+			wrappedCreators, err := validatorCreationRequirements(wrapped)
+			if err != nil {
+				return nil, err
+			}
+			for creator, count := range wrappedCreators {
+				creators[creator] += count
+			}
+			continue
+		}
+
 		create, ok := msg.(*stakingtypes.MsgCreateValidator)
 		if !ok {
 			continue
 		}
 		if create.Value.Denom != BaseDenom || create.Value.Amount.LT(MinimumValidatorSelfDelegation) {
 			return nil, fmt.Errorf("validator creation requires at least %s%s self-delegation", MinimumValidatorSelfDelegation.String(), BaseDenom)
+		}
+		if create.MinSelfDelegation.LT(MinimumValidatorSelfDelegation) {
+			return nil, fmt.Errorf("validator creation requires min_self_delegation of at least %s%s", MinimumValidatorSelfDelegation.String(), BaseDenom)
 		}
 		valAddr, err := sdk.ValAddressFromBech32(create.ValidatorAddress)
 		if err != nil {
