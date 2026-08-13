@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/spf13/cobra"
 
 	cryptohd "github.com/cosmos/evm/crypto/hd"
@@ -307,11 +308,21 @@ func RunAddCmd(ctx client.Context, cmd *cobra.Command, args []string, inBuf *buf
 }
 
 func printCreate(cmd *cobra.Command, k *keyring.Record, showMnemonic bool, mnemonic, outputFormat string) error {
+	evmAddress, err := evmAddressForRecord(k)
+	if err != nil {
+		return err
+	}
+
 	switch outputFormat {
 	case OutputFormatText:
 		cmd.PrintErrln()
 		if err := printKeyringRecord(cmd.OutOrStdout(), k, keys.MkAccKeyOutput, outputFormat); err != nil {
 			return err
+		}
+		if evmAddress != "" {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "EVM Address: %s\n", evmAddress); err != nil {
+				return fmt.Errorf("print EVM address: %w", err)
+			}
 		}
 
 		// print mnemonic unless requested not to.
@@ -333,18 +344,40 @@ func printCreate(cmd *cobra.Command, k *keyring.Record, showMnemonic bool, mnemo
 			out.Mnemonic = mnemonic
 		}
 
-		jsonString, err := json.Marshal(out)
+		jsonBz, err := json.Marshal(out)
 		if err != nil {
 			return err
 		}
+		if evmAddress != "" {
+			var payload map[string]any
+			if err := json.Unmarshal(jsonBz, &payload); err != nil {
+				return err
+			}
+			payload["evm_address"] = evmAddress
+			jsonBz, err = json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+		}
 
-		cmd.Println(string(jsonString))
+		cmd.Println(string(jsonBz))
 
 	default:
 		return fmt.Errorf("invalid output format %s", outputFormat)
 	}
 
 	return nil
+}
+
+func evmAddressForRecord(k *keyring.Record) (string, error) {
+	address, err := k.GetAddress()
+	if err != nil {
+		return "", err
+	}
+	if len(address) != common.AddressLength {
+		return "", nil
+	}
+	return common.BytesToAddress(address).Hex(), nil
 }
 
 func validateMultisigThreshold(k, nKeys int) error {

@@ -59,7 +59,7 @@ func GetChainConfig() *ChainConfig {
 // default values. The method is private because it should only be called once
 // in the EVMConfigurator.
 func SetChainConfig(cc *ChainConfig) error {
-	if chainConfig != nil && chainConfig.ChainId != DefaultEVMChainID {
+	if chainConfig != nil && chainConfig.ChainId != DefaultEVMChainID && (cc == nil || chainConfig.ChainId != cc.ChainId) {
 		return errors.New("chainConfig already set. Cannot set again the chainConfig")
 	}
 	config := DefaultChainConfig(0)

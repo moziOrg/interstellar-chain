@@ -54,6 +54,7 @@ func (ec *EVMConfigurator) ResetTestConfig() {
 	resetEVMCoinInfo()
 	testChainConfigMu.Lock()
 	testChainConfig = nil
+	gethChainConfig = nil
 	testChainConfigMu.Unlock()
 }
 
@@ -72,6 +73,7 @@ func setTestChainConfig(cc *ChainConfig) error {
 		return err
 	}
 	testChainConfig = config
+	gethChainConfig = nil
 	return nil
 }
 
@@ -93,6 +95,7 @@ func SetChainConfig(cc *ChainConfig) error {
 		return err
 	}
 	testChainConfig = config
+	gethChainConfig = nil
 
 	return nil
 }
