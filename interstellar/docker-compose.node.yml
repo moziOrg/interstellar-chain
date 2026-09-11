@@ -1,0 +1,70 @@
+# Copy this file and docker-node.env.example to an operator-owned directory.
+# Do not run more than one container against the same NODE_HOME.
+services:
+  interstellard:
+    image: "${IMAGE:?set IMAGE in the env file}"
+    container_name: "${CONTAINER_NAME:-interstellard}"
+    init: true
+    # Never restart automatically. Start it explicitly after investigating a failure.
+    restart: "no"
+    stop_grace_period: 90s
+    # Match the owner of NODE_HOME. Defaults to the non-root image user.
+    user: "${NODE_UID:-10001}:${NODE_GID:-10001}"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    volumes:
+      - "${NODE_HOME:?set NODE_HOME in the env file}:/data"
+    ports:
+      # P2P must be reachable by peers. Restrict it at the cloud security group/firewall.
+      - "${P2P_PORT:-26656}:26656"
+      # Keep RPC on loopback and publish it through a TLS reverse proxy when public access is needed.
+      - "${EVM_RPC_BIND:-127.0.0.1}:${EVM_RPC_PORT:-8545}:8545"
+      - "${EVM_WS_BIND:-127.0.0.1}:${EVM_WS_PORT:-8546}:8546"
+      # Prometheus must be enabled in config/config.toml before this endpoint serves metrics.
+      # Keep loopback by default; use a firewall/security group to restrict external scrapers.
+      - "${PROMETHEUS_BIND:-127.0.0.1}:${PROMETHEUS_PORT:-26660}:26660"
+      # Optional EVM RPC metrics endpoint; enable with EVM_RPC_METRICS_ENABLE=true.
+      - "${EVM_METRICS_BIND:-127.0.0.1}:${EVM_METRICS_PORT:-6065}:6065"
+    command:
+      - start
+      - --home
+      - /data
+      - --chain-id
+      - ${CHAIN_ID:?set CHAIN_ID in the env file}
+      - --node-mode
+      - ${NODE_MODE:-rpc}
+      - --rpc.laddr
+      - tcp://127.0.0.1:26657
+      - --p2p.laddr
+      - tcp://0.0.0.0:26656
+      - --p2p.persistent_peers
+      - ${PERSISTENT_PEERS:?set PERSISTENT_PEERS in the env file}
+      - --minimum-gas-prices
+      - ${MINIMUM_GAS_PRICES:-1000000000ahuge}
+      - --log_format
+      - ${LOG_FORMAT:-json}
+      - --log_level
+      - ${LOG_LEVEL:-info}
+      - --json-rpc.enable=true
+      - --json-rpc.address
+      - 0.0.0.0:8545
+      - --json-rpc.ws-address
+      - 0.0.0.0:8546
+      - --json-rpc.api
+      - ${JSON_RPC_API:-eth,net,txpool,web3}
+      - --json-rpc.enable-indexer=${EVM_INDEXER_ENABLE:-true}
+      - --metrics=${EVM_RPC_METRICS_ENABLE:-false}
+    logging:
+      driver: local
+      options:
+        max-size: "200m"
+        max-file: "14"
+        compress: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "interstellard status --node tcp://127.0.0.1:26657 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

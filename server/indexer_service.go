@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/cometbft/cometbft/libs/service"
@@ -44,7 +45,8 @@ func (eis *EVMIndexerService) OnStart() error {
 	if err != nil {
 		return err
 	}
-	latestBlock := status.SyncInfo.LatestBlockHeight
+	var latestBlock atomic.Int64
+	latestBlock.Store(status.SyncInfo.LatestBlockHeight)
 	newBlockSignal := make(chan struct{}, 1)
 
 	// Use SubscribeUnbuffered here to ensure both subscriptions does not get
@@ -61,10 +63,22 @@ func (eis *EVMIndexerService) OnStart() error {
 
 	go func() {
 		for {
-			msg := <-blockHeadersChan
-			eventDataHeader := msg.Data.(types.EventDataNewBlockHeader)
-			if eventDataHeader.Header.Height > latestBlock {
-				latestBlock = eventDataHeader.Header.Height
+			var msg coretypes.ResultEvent
+			select {
+			case <-eis.Quit():
+				return
+			case event, ok := <-blockHeadersChan:
+				if !ok {
+					return
+				}
+				msg = event
+			}
+			eventDataHeader, ok := msg.Data.(types.EventDataNewBlockHeader)
+			if !ok {
+				continue
+			}
+			if eventDataHeader.Header.Height > latestBlock.Load() {
+				latestBlock.Store(eventDataHeader.Header.Height)
 				// notify
 				select {
 				case newBlockSignal <- struct{}{}:
@@ -79,14 +93,14 @@ func (eis *EVMIndexerService) OnStart() error {
 		return err
 	}
 	if lastBlock == -1 {
-		lastBlock = latestBlock
+		lastBlock = latestBlock.Load()
 	}
 
-	// blockErr indicates an error fetching an expected block or its results
+	// blockErr indicates a failed fetch or index write. Never skip that height.
 	var blockErr error
 
 	for {
-		if latestBlock <= lastBlock || blockErr != nil {
+		if latestBlock.Load() <= lastBlock || blockErr != nil {
 			// two cases to enter this block:
 			// 1. nothing to index (indexer is caught up). wait for signal of new block.
 			// 2. previous attempt to index errored (failed to fetch the Block or BlockResults).
@@ -94,12 +108,19 @@ func (eis *EVMIndexerService) OnStart() error {
 			//    a failing fetch. this can occur due to drive latency between the block existing and its
 			//    block_results getting saved.
 			select {
+			case <-eis.Quit():
+				return nil
 			case <-newBlockSignal:
 			case <-time.After(NewBlockWaitTimeout):
 			}
-			continue
+			blockErr = nil
 		}
-		for i := lastBlock + 1; i <= latestBlock; i++ {
+		for i := lastBlock + 1; i <= latestBlock.Load(); i++ {
+			select {
+			case <-eis.Quit():
+				return nil
+			default:
+			}
 			var (
 				block       *coretypes.ResultBlock
 				blockResult *coretypes.ResultBlockResults
@@ -115,8 +136,9 @@ func (eis *EVMIndexerService) OnStart() error {
 				eis.Logger.Error("failed to fetch block result", "height", i, "err", blockErr)
 				break
 			}
-			if err := eis.txIdxr.IndexBlock(block.Block, blockResult.TxsResults); err != nil {
-				eis.Logger.Error("failed to index block", "height", i, "err", err)
+			if blockErr = eis.txIdxr.IndexBlock(block.Block, blockResult.TxsResults); blockErr != nil {
+				eis.Logger.Error("failed to index block", "height", i, "err", blockErr)
+				break
 			}
 			lastBlock = blockResult.Height
 		}

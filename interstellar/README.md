@@ -10,7 +10,7 @@ while allowing upstream Cosmos EVM releases to be merged at the library layer.
 | Setting | Value |
 | --- | --- |
 | Binary | `interstellard` |
-| Mainnet Cosmos chain ID | `intl-mainnet` |
+| Mainnet Cosmos chain ID | `intl-main` |
 | Testnet Cosmos chain ID | `intl-testnet-1` |
 | Devnet Cosmos chain ID | `intl-dev-1` |
 | Mainnet EVM chain ID | `1677` |
@@ -33,6 +33,16 @@ the repository root:
 ```sh
 docker build -f interstellar/Dockerfile -t interstellar/interstellard:dev .
 ```
+
+For a long-running Docker node, including persistent storage, graceful stops,
+automatic log rotation, and GoLevelDB/RocksDB build notes, see the
+[Chinese Docker deployment manual](DOCKER_NODE_MANUAL.zh-CN.md).
+
+## Chinese operational manuals
+
+- [Manual genesis network creation](GENESIS_NETWORK_MANUAL.zh-CN.md)
+- [Mainnet launch parameters and release checklist](MAINNET_LAUNCH_CHECKLIST.zh-CN.md)
+- [CLI operations: validators, staking, governance, and upgrades](INTERSTELLAR_CLI_MANUAL.zh-CN.md)
 
 The genesis helpers support local and integration testnets. Interstellar replaces
 the reference inflation with a capped 170,000,000 HUGE schedule, while mainnet
@@ -66,12 +76,14 @@ The default binary uses GoLevelDB. A RocksDB binary is optional:
 make build-rocksdb
 ```
 
-For a RocksDB node, start the RocksDB-built binary and set both values before
-initializing or restoring data:
+For a RocksDB application state store, build the RocksDB image or binary. The
+CometBFT database must remain on a backend it supports (`goleveldb` or
+`pebbledb`); RocksDB applies only to the application state and snapshot
+databases:
 
 ```toml
 # config/config.toml
-db_backend = "rocksdb"
+db_backend = "goleveldb"
 
 # config/app.toml
 app-db-backend = "rocksdb"

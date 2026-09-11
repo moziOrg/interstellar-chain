@@ -13,7 +13,7 @@ const (
 	DenomSymbol   = "HUGE"
 	DenomExponent = 18
 
-	MainnetChainID = "intl-mainnet"
+	MainnetChainID = "intl-main"
 	TestnetChainID = "intl-testnet-1"
 	DevnetChainID  = "intl-dev-1"
 
@@ -29,7 +29,10 @@ const (
 
 	// DefaultBlockGasLimit is the launch block capacity. It lives in the
 	// Cosmos consensus parameters and can be changed later through governance.
-	DefaultBlockGasLimit int64 = 55_000_000
+	DefaultBlockGasLimit int64 = 100_000_000
+	// DefaultMaxValidators is the initial active-validator-set limit. It is a
+	// staking parameter in genesis and can subsequently be updated by governance.
+	DefaultMaxValidators uint32 = 5
 	// TargetBlockInterval is the healthy-round commit interval for new nodes.
 	TargetBlockInterval time.Duration = 3 * time.Second
 

@@ -1,0 +1,12 @@
+.git
+.github
+.vscode
+.agents
+.testnets
+build
+interstellar/bin
+tests/systemtests/binaries
+tests/systemtests/testnet
+**/node_modules
+**/*.log
+**/*.swp

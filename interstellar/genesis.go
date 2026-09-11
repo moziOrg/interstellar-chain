@@ -127,7 +127,7 @@ func ApplyGenesisDefaults(cdc codec.Codec, genesis GenesisState) GenesisState {
 	var stakingGenState stakingtypes.GenesisState
 	cdc.MustUnmarshalJSON(genesis[stakingtypes.ModuleName], &stakingGenState)
 	stakingGenState.Params.BondDenom = BaseDenom
-	stakingGenState.Params.MaxValidators = 5
+	stakingGenState.Params.MaxValidators = DefaultMaxValidators
 	genesis[stakingtypes.ModuleName] = cdc.MustMarshalJSON(&stakingGenState)
 
 	var distrGenState distrtypes.GenesisState
@@ -161,6 +161,59 @@ func ValidateInitialSupply(cdc codec.Codec, chainID string, genesis GenesisState
 		return fmt.Errorf(
 			"mainnet genesis must allocate exactly %s%s (17,000,000 HUGE), got %s%s",
 			InitialCirculationAtto, BaseDenom, actual, BaseDenom,
+		)
+	}
+
+	return validateMainnetGenesisValidatorLocks(genesis, &bankGenState)
+}
+
+// validateMainnetGenesisValidatorLocks makes the validator-admission deposit
+// explicit at genesis. GenTxs execute at height zero, where the runtime
+// admission service intentionally does not move coins; the immutable genesis
+// allocation therefore funds the dead address directly instead.
+func validateMainnetGenesisValidatorLocks(genesis GenesisState, bankGenState *banktypes.GenesisState) error {
+	var genutilGenState struct {
+		GenTxs       []json.RawMessage `json:"gen_txs"`
+		LegacyGenTxs []json.RawMessage `json:"gentxs"`
+	}
+	if err := json.Unmarshal(genesis["genutil"], &genutilGenState); err != nil {
+		return fmt.Errorf("decode genutil genesis: %w", err)
+	}
+	genTxs := genutilGenState.GenTxs
+	if len(genTxs) == 0 {
+		genTxs = genutilGenState.LegacyGenTxs
+	}
+	if len(genTxs) > int(DefaultMaxValidators) {
+		return fmt.Errorf("mainnet genesis has %d validators, exceeds max_validators %d", len(genTxs), DefaultMaxValidators)
+	}
+
+	for i, genTx := range genTxs {
+		var tx struct {
+			Body struct {
+				Messages []struct {
+					TypeURL string `json:"@type"`
+				} `json:"messages"`
+			} `json:"body"`
+		}
+		if err := json.Unmarshal(genTx, &tx); err != nil {
+			return fmt.Errorf("decode mainnet gentx %d: %w", i, err)
+		}
+		if len(tx.Body.Messages) != 1 || tx.Body.Messages[0].TypeURL != "/cosmos.staking.v1beta1.MsgCreateValidator" {
+			return fmt.Errorf("mainnet gentx %d must contain exactly one MsgCreateValidator", i)
+		}
+	}
+
+	deadBalance := math.ZeroInt()
+	for _, balance := range bankGenState.Balances {
+		if balance.Address == DeadAddress().String() {
+			deadBalance = deadBalance.Add(balance.Coins.AmountOf(BaseDenom))
+		}
+	}
+	expectedLock := ValidatorCreationLock.MulRaw(int64(len(genTxs)))
+	if !deadBalance.Equal(expectedLock) {
+		return fmt.Errorf(
+			"mainnet genesis dead-address balance must be exactly %s%s (%d validators x %s%s), got %s%s",
+			expectedLock, BaseDenom, len(genTxs), ValidatorCreationLock, BaseDenom, deadBalance, BaseDenom,
 		)
 	}
 	return nil

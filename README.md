@@ -3,6 +3,28 @@ src="repo_header.svg"
 alt="Cosmos EVM - A plug-and-play solution that adds EVM compatibility and customizability to your chain"
 />
 
+# Interstellar Chain project entry
+
+This repository vendors and extends Cosmos EVM. The production application is
+`interstellar/` and its daemon is `interstellard`; do not use the upstream
+`evmd` example binary for an Interstellar network.
+
+Use the root Makefile for project operations:
+
+```bash
+make build
+make test
+make docker-build
+make release-check
+```
+
+Interstellar's node, Docker, genesis, CLI, and mainnet documents are in
+[interstellar/README.md](interstellar/README.md). Upstream maintenance targets
+remain available only as `make upstream-<target>`, for example
+`make upstream-test-unit`.
+
+## Upstream Cosmos EVM source
+
 ## What is Cosmos EVM?
 
 Cosmos EVM is a plug-and-play solution that adds EVM compatibility and customizability to your Cosmos SDK chain. Cosmos EVM is used by Ondo, Mezo, Mantra, XRP sidechain, Telegram Application Chain (TAC), Stable, and others. Cosmos EVM equips Cosmos chains with complete Ethereum capabilities: Solidity smart contracts, Ethereum JSON-RPC, native support for the EVM wallet/token/user experience, and access to the entire Ethereum developer ecosystem. Its precompiles and extensions allow developers to leverage modules like [IBC](https://github.com/cosmos/ibc-go) with EVM and get native ERC-20 support for tokens on Cosmos. 

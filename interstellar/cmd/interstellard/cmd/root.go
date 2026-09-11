@@ -20,7 +20,6 @@ import (
 	"github.com/cosmos/evm/crypto/hd"
 	cosmosevmserver "github.com/cosmos/evm/server"
 	srvflags "github.com/cosmos/evm/server/flags"
-	"github.com/cosmos/evm/utils"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
 	"github.com/moziOrg/interstellar-chain/interstellar"
 	"github.com/moziOrg/interstellar-chain/interstellar/config"
@@ -401,6 +400,9 @@ func newApp(
 	if err != nil {
 		panic(err)
 	}
+	if err := validateEVMChainID(appOpts, chainID); err != nil {
+		panic(err)
+	}
 
 	snapshotStore, err := sdkserver.GetSnapshotStore(appOpts)
 	if err != nil {
@@ -468,6 +470,9 @@ func appExport(
 	if err != nil {
 		return servertypes.ExportedApp{}, err
 	}
+	if err := validateEVMChainID(appOpts, chainID); err != nil {
+		return servertypes.ExportedApp{}, err
+	}
 
 	if height != -1 {
 		exampleApp = interstellar.NewApp(logger, db, false, appOpts, baseapp.SetChainID(chainID))
@@ -482,20 +487,31 @@ func appExport(
 	return exampleApp.ExportAppStateAndValidators(forZeroHeight, jailAllowedAddrs, modulesToExport)
 }
 
-// getChainIDFromOpts returns the chain Id from app Opts
-// It first tries to get from the chainId flag, if not available
-// it will load from home
+// The genesis chain ID is authoritative; a command-line override must agree.
 func getChainIDFromOpts(appOpts servertypes.AppOptions) (chainID string, err error) {
-	// Get the chain Id from appOpts
-	chainID = cast.ToString(appOpts.Get(flags.FlagChainID))
-	if chainID == "" {
-		// If not available load from home
-		homeDir := cast.ToString(appOpts.Get(flags.FlagHome))
-		chainID, err = utils.GetChainIDFromHome(homeDir)
-		if err != nil {
-			return "", err
-		}
+	genesisFile := filepath.Join(cast.ToString(appOpts.Get(flags.FlagHome)), "config", "genesis.json")
+	appGenesis, err := genutiltypes.AppGenesisFromFile(genesisFile)
+	if err != nil {
+		return "", err
+	}
+	chainID = appGenesis.ChainID
+	if requested := cast.ToString(appOpts.Get(flags.FlagChainID)); requested != "" && requested != chainID {
+		return "", fmt.Errorf("Cosmos chain-id mismatch: configured %q, genesis %q", requested, chainID)
 	}
 
 	return chainID, err
+}
+
+// validateEVMChainID checks the effective config, including flag overrides.
+// EVM chain ID is a consensus input, not a per-node preference.
+func validateEVMChainID(appOpts servertypes.AppOptions, chainID string) error {
+	if !interstellar.IsSupportedChainID(chainID) {
+		return fmt.Errorf("unsupported Interstellar chain ID %q", chainID)
+	}
+	actual, err := cast.ToUint64E(appOpts.Get(srvflags.EVMChainID))
+	expected := interstellar.EVMChainIDForChainID(chainID)
+	if err != nil || actual != expected {
+		return fmt.Errorf("EVM chain ID mismatch for Cosmos chain-id %q: got %v, expected %d; check %s and --%s", chainID, appOpts.Get(srvflags.EVMChainID), expected, filepath.Join(cast.ToString(appOpts.Get(flags.FlagHome)), "config", "app.toml"), srvflags.EVMChainID)
+	}
+	return nil
 }

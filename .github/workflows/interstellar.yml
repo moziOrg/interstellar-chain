@@ -1,0 +1,45 @@
+name: Interstellar
+
+on:
+  push:
+    paths:
+      - 'interstellar/**'
+      - 'server/**'
+      - 'scripts/verify-interstellar-mainnet-release.sh'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/interstellar.yml'
+  pull_request:
+    paths:
+      - 'interstellar/**'
+      - 'server/**'
+      - 'scripts/verify-interstellar-mainnet-release.sh'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/interstellar.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Build and verify Interstellar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: interstellar/go.mod
+          cache-dependency-path: |
+            go.sum
+            interstellar/go.sum
+      - name: Test Interstellar application
+        run: make test
+      - name: Test node services
+        run: make test-server
+      - name: Static checks
+        run: make vet
+      - name: Build and verify mainnet defaults
+        run: make mainnet-genesis-check

@@ -23,6 +23,7 @@ import (
 	evmencoding "github.com/cosmos/evm/encoding"
 	evmaddress "github.com/cosmos/evm/encoding/address"
 	evmmempool "github.com/cosmos/evm/mempool"
+	stakingprecompile "github.com/cosmos/evm/precompiles/staking"
 	precompiletypes "github.com/cosmos/evm/precompiles/types"
 	cosmosevmserver "github.com/cosmos/evm/server"
 	srvflags "github.com/cosmos/evm/server/flags"
@@ -380,6 +381,7 @@ func NewApp(
 	app.StakingKeeper.SetHooks(
 		stakingtypes.NewMultiStakingHooks(app.DistrKeeper.Hooks(), app.SlashingKeeper.Hooks()),
 	)
+	validatorAdmission := NewValidatorAdmissionService(app.BankKeeper)
 
 	app.AuthzKeeper = authzkeeper.NewKeeper(
 		runtime.NewKVStoreService(keys[authzkeeper.StoreKey]),
@@ -495,6 +497,16 @@ func NewApp(
 			appCodec,
 		),
 	)
+	// The staking precompile keeps its address and ABI. Only its MsgServer is
+	// replaced so it follows the same validator-admission policy as SDK txs.
+	admissionStakingPrecompile := stakingprecompile.NewPrecompile(
+		*app.StakingKeeper,
+		NewValidatorAdmissionMsgServer(stakingkeeper.NewMsgServerImpl(app.StakingKeeper), validatorAdmission),
+		stakingkeeper.NewQuerier(app.StakingKeeper),
+		app.BankKeeper,
+		evmaddress.NewEvmCodec(sdk.GetConfig().GetBech32AccountAddrPrefix()),
+	)
+	app.EVMKeeper.RegisterStaticPrecompile(common.HexToAddress(evmtypes.StakingPrecompileAddress), admissionStakingPrecompile)
 
 	// enable virtual fee collection
 	app.EVMKeeper.EnableVirtualFeeCollection()
@@ -580,7 +592,7 @@ func NewApp(
 		mint.NewAppModule(appCodec, app.MintKeeper, app.AccountKeeper, nil, nil),
 		slashing.NewAppModule(appCodec, app.SlashingKeeper, app.AccountKeeper, app.BankKeeper, app.StakingKeeper, nil, app.interfaceRegistry),
 		distr.NewAppModule(appCodec, app.DistrKeeper, app.AccountKeeper, app.BankKeeper, app.StakingKeeper, nil),
-		staking.NewAppModule(appCodec, app.StakingKeeper, app.AccountKeeper, app.BankKeeper, nil),
+		newValidatorAdmissionStakingModule(appCodec, app.StakingKeeper, app.AccountKeeper, app.BankKeeper, validatorAdmission),
 		upgrade.NewAppModule(app.UpgradeKeeper, app.AccountKeeper.AddressCodec()),
 		evidence.NewAppModule(app.EvidenceKeeper),
 		authzmodule.NewAppModule(appCodec, app.AuthzKeeper, app.AccountKeeper, app.BankKeeper, app.interfaceRegistry),
@@ -835,7 +847,7 @@ func (app *EVMD) setAnteHandler(txConfig client.TxConfig, maxGasWanted uint64) {
 		panic(err)
 	}
 
-	app.SetAnteHandler(ValidatorAdmissionAnteHandler(app.BankKeeper, evmante.NewAnteHandler(options)))
+	app.SetAnteHandler(ValidatorAdmissionValidationAnteHandler(evmante.NewAnteHandler(options)))
 }
 
 func (app *EVMD) onPendingTx(hash common.Hash) {

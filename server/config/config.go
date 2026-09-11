@@ -63,7 +63,7 @@ const (
 	DefaultMaxTxGasWanted = 0
 
 	// DefaultEVMChainID is the default EVM Chain ID if one is not provided
-	DefaultEVMChainID = 262144
+	DefaultEVMChainID = 1677
 
 	// DefaultEVMMinTip is the default minimum priority fee for the mempool
 	DefaultEVMMinTip = 0

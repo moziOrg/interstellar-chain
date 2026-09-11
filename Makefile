@@ -1,5 +1,10 @@
 #!/usr/bin/make -f
 
+# This repository retains the upstream Cosmos EVM source tree. Its legacy
+# automation is intentionally available only through `make upstream-<target>`
+# so a normal `make build` can never publish the upstream evmd example binary.
+ifeq ($(UPSTREAM),1)
+
 ###############################################################################
 ###                           Module & Versioning                           ###
 ###############################################################################
@@ -462,3 +467,83 @@ d2gen-all: d2check
 		$(D2_ENV_VARS) d2 "$$d2file" "$$svgfile" > /dev/null 2>&1 && echo "done ✅" || echo "failed ❌"; \
 	done
 	@echo "✅ svg files generated for all d2 diagrams"
+
+else
+
+###############################################################################
+###                         Interstellar project entry                      ###
+###############################################################################
+
+INTERSTELLAR_DIR := interstellar
+INTERSTELLAR_BIN := $(INTERSTELLAR_DIR)/bin/interstellard
+INTERSTELLAR_COMPOSE := $(INTERSTELLAR_DIR)/docker-compose.node.yml
+INTERSTELLAR_RELEASE_CHECK := scripts/verify-interstellar-mainnet-release.sh
+
+.DEFAULT_GOAL := all
+
+.PHONY: all help build build-rocksdb test test-config test-server vet docker-build docker-build-rocksdb docker-node-up docker-node-down docker-node-logs mainnet-genesis-check release-check upstream-%
+
+all: build
+
+help:
+	@echo "Interstellar project targets:"
+	@echo "  make build                    Build interstellar/bin/interstellard"
+	@echo "  make build-rocksdb            Build the optional RocksDB application binary"
+	@echo "  make test                     Run Interstellar Go tests"
+	@echo "  make test-server              Run root server/indexer regression tests"
+	@echo "  make vet                      Run Interstellar static checks"
+	@echo "  make docker-build             Build the standard Interstellar Docker image"
+	@echo "  make docker-build-rocksdb     Build the RocksDB Interstellar Docker image"
+	@echo "  make mainnet-genesis-check    Verify generated mainnet defaults in a temporary home"
+	@echo "  make release-check            Require a clean tree and run all mainnet release checks"
+	@echo "  make docker-node-up ENV_FILE=/path/.env"
+	@echo "  make upstream-<target>        Run an isolated legacy Cosmos EVM target"
+
+build:
+	+$(MAKE) -C $(INTERSTELLAR_DIR) build
+
+build-rocksdb:
+	+$(MAKE) -C $(INTERSTELLAR_DIR) build-rocksdb
+
+test:
+	@cd $(INTERSTELLAR_DIR) && go test -mod=readonly ./...
+
+test-config:
+	+$(MAKE) -C $(INTERSTELLAR_DIR) test-config
+
+test-server:
+	@go test -mod=readonly ./server ./server/config
+
+vet:
+	@cd $(INTERSTELLAR_DIR) && go vet ./...
+
+docker-build:
+	+$(MAKE) -C $(INTERSTELLAR_DIR) docker-build
+
+docker-build-rocksdb:
+	+$(MAKE) -C $(INTERSTELLAR_DIR) docker-build-rocksdb
+
+docker-node-up:
+	@test -n "$(ENV_FILE)" || (echo "ENV_FILE is required, for example: make docker-node-up ENV_FILE=/srv/interstellar/.env" >&2; exit 2)
+	docker compose --env-file "$(ENV_FILE)" -f $(INTERSTELLAR_COMPOSE) up -d
+
+docker-node-down:
+	@test -n "$(ENV_FILE)" || (echo "ENV_FILE is required" >&2; exit 2)
+	docker compose --env-file "$(ENV_FILE)" -f $(INTERSTELLAR_COMPOSE) down
+
+docker-node-logs:
+	@test -n "$(ENV_FILE)" || (echo "ENV_FILE is required" >&2; exit 2)
+	docker compose --env-file "$(ENV_FILE)" -f $(INTERSTELLAR_COMPOSE) logs -f --tail=200
+
+mainnet-genesis-check: build
+	@bash $(INTERSTELLAR_RELEASE_CHECK) $(INTERSTELLAR_BIN)
+
+release-check: test test-config test-server vet mainnet-genesis-check
+	@git diff --check
+	@git diff --quiet && git diff --cached --quiet && test -z "$$(git ls-files --others --exclude-standard)" || (echo "release-check requires a clean, committed worktree" >&2; exit 1)
+	@echo "Interstellar release check passed. Record the binary and genesis SHA-256 before distribution."
+
+upstream-%:
+	+$(MAKE) UPSTREAM=1 $*
+
+endif

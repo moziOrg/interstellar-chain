@@ -15,7 +15,7 @@ const DeadAddressHex = "0x000000000000000000000000000000000000dEaD"
 
 var (
 	MinimumValidatorSelfDelegation = AttoPerHUGE.MulRaw(500_000)
-	ValidatorCreationLock          = AttoPerHUGE.MulRaw(1_000)
+	ValidatorCreationLock          = AttoPerHUGE.MulRaw(5_000)
 )
 
 func DeadAddress() sdk.AccAddress {
@@ -26,71 +26,96 @@ type validatorAdmissionBankKeeper interface {
 	SendCoins(context.Context, sdk.AccAddress, sdk.AccAddress, sdk.Coins) error
 }
 
-// ValidatorAdmissionAnteHandler requires a 500,000 HUGE self-delegation and
-// minimum persistent self-delegation, and atomically locks 1,000 HUGE in
-// DEAD_ADDRESS for every validator creation. Authz-wrapped creation messages
-// are subject to the same requirements. The automatic transfer preserves the
-// standard staking create-validator CLI.
-func ValidatorAdmissionAnteHandler(bankKeeper validatorAdmissionBankKeeper, next sdk.AnteHandler) sdk.AnteHandler {
+// ValidatorAdmissionService applies Interstellar's validator-creation policy
+// before the native staking MsgServer mutates staking state. It is shared by
+// the SDK message route and the EVM staking precompile route.
+type ValidatorAdmissionService struct {
+	bankKeeper validatorAdmissionBankKeeper
+}
+
+func NewValidatorAdmissionService(bankKeeper validatorAdmissionBankKeeper) ValidatorAdmissionService {
+	return ValidatorAdmissionService{bankKeeper: bankKeeper}
+}
+
+// AdmitCreateValidator validates the protocol minimums and locks the creation
+// deposit. It runs in the same message-execution cache as CreateValidator, so
+// a subsequent native staking error reverts the lock transfer as well.
+func (s ValidatorAdmissionService) AdmitCreateValidator(ctx sdk.Context, create *stakingtypes.MsgCreateValidator) error {
+	creator, err := validateValidatorCreation(create)
+	if err != nil {
+		return err
+	}
+	// GenTxs run at height zero. Their lock allocation is part of the immutable
+	// genesis distribution, while the self-delegation requirements still apply.
+	if ctx.BlockHeight() == 0 {
+		return nil
+	}
+	if err := s.bankKeeper.SendCoins(ctx, creator, DeadAddress(), sdk.NewCoins(sdk.NewCoin(BaseDenom, ValidatorCreationLock))); err != nil {
+		return fmt.Errorf("lock validator creation deposit: %w", err)
+	}
+	return nil
+}
+
+func validateValidatorCreation(create *stakingtypes.MsgCreateValidator) (sdk.AccAddress, error) {
+	if create.Value.Denom != BaseDenom || create.Value.Amount.LT(MinimumValidatorSelfDelegation) {
+		return nil, fmt.Errorf("validator creation requires at least %s%s self-delegation", MinimumValidatorSelfDelegation.String(), BaseDenom)
+	}
+	if create.MinSelfDelegation.LT(MinimumValidatorSelfDelegation) {
+		return nil, fmt.Errorf("validator creation requires min_self_delegation of at least %s%s", MinimumValidatorSelfDelegation.String(), BaseDenom)
+	}
+	valAddr, err := sdk.ValAddressFromBech32(create.ValidatorAddress)
+	if err != nil {
+		return nil, fmt.Errorf("invalid validator address: %w", err)
+	}
+	return sdk.AccAddress(valAddr), nil
+}
+
+// ValidatorAdmissionValidationAnteHandler is deliberately read-only. It keeps
+// invalid SDK (including authz-wrapped) create-validator transactions out of
+// Prepare/ProcessProposal, while the MsgServer wrapper remains the
+// authoritative shared state transition for both SDK and EVM routes.
+func ValidatorAdmissionValidationAnteHandler(next sdk.AnteHandler) sdk.AnteHandler {
 	return func(ctx sdk.Context, tx sdk.Tx, simulate bool) (sdk.Context, error) {
-		creators, err := validatorCreationRequirements(tx.GetMsgs())
-		if err != nil {
+		if err := validateValidatorCreationMessages(tx.GetMsgs()); err != nil {
 			return ctx, err
-		}
-		// GenTxs are replayed while InitChain runs at height zero. Their required
-		// locks are allocated directly in the immutable genesis state because the
-		// SDK GenTx format permits only MsgCreateValidator. The self-delegation
-		// requirement is still validated above.
-		if ctx.BlockHeight() == 0 {
-			return next(ctx, tx, simulate)
-		}
-		for creator, count := range creators {
-			amount := ValidatorCreationLock.MulRaw(int64(count))
-			creatorAddr, err := sdk.AccAddressFromBech32(creator)
-			if err != nil {
-				return ctx, fmt.Errorf("invalid validator creator address: %w", err)
-			}
-			if err := bankKeeper.SendCoins(ctx, creatorAddr, DeadAddress(), sdk.NewCoins(sdk.NewCoin(BaseDenom, amount))); err != nil {
-				return ctx, fmt.Errorf("lock validator creation deposit: %w", err)
-			}
 		}
 		return next(ctx, tx, simulate)
 	}
 }
 
-func validatorCreationRequirements(msgs []sdk.Msg) (map[string]int, error) {
-	creators := make(map[string]int)
+func validateValidatorCreationMessages(msgs []sdk.Msg) error {
 	for _, msg := range msgs {
 		if exec, ok := msg.(*authz.MsgExec); ok {
 			wrapped, err := exec.GetMessages()
 			if err != nil {
-				return nil, fmt.Errorf("unpack authz messages: %w", err)
+				return fmt.Errorf("unpack authz messages: %w", err)
 			}
-			wrappedCreators, err := validatorCreationRequirements(wrapped)
-			if err != nil {
-				return nil, err
-			}
-			for creator, count := range wrappedCreators {
-				creators[creator] += count
+			if err := validateValidatorCreationMessages(wrapped); err != nil {
+				return err
 			}
 			continue
 		}
-
-		create, ok := msg.(*stakingtypes.MsgCreateValidator)
-		if !ok {
-			continue
+		if create, ok := msg.(*stakingtypes.MsgCreateValidator); ok {
+			if _, err := validateValidatorCreation(create); err != nil {
+				return err
+			}
 		}
-		if create.Value.Denom != BaseDenom || create.Value.Amount.LT(MinimumValidatorSelfDelegation) {
-			return nil, fmt.Errorf("validator creation requires at least %s%s self-delegation", MinimumValidatorSelfDelegation.String(), BaseDenom)
-		}
-		if create.MinSelfDelegation.LT(MinimumValidatorSelfDelegation) {
-			return nil, fmt.Errorf("validator creation requires min_self_delegation of at least %s%s", MinimumValidatorSelfDelegation.String(), BaseDenom)
-		}
-		valAddr, err := sdk.ValAddressFromBech32(create.ValidatorAddress)
-		if err != nil {
-			return nil, fmt.Errorf("invalid validator address: %w", err)
-		}
-		creators[sdk.AccAddress(valAddr).String()]++
 	}
-	return creators, nil
+	return nil
+}
+
+type validatorAdmissionMsgServer struct {
+	stakingtypes.MsgServer
+	admission ValidatorAdmissionService
+}
+
+func NewValidatorAdmissionMsgServer(next stakingtypes.MsgServer, admission ValidatorAdmissionService) stakingtypes.MsgServer {
+	return validatorAdmissionMsgServer{MsgServer: next, admission: admission}
+}
+
+func (s validatorAdmissionMsgServer) CreateValidator(goCtx context.Context, create *stakingtypes.MsgCreateValidator) (*stakingtypes.MsgCreateValidatorResponse, error) {
+	if err := s.admission.AdmitCreateValidator(sdk.UnwrapSDKContext(goCtx), create); err != nil {
+		return nil, err
+	}
+	return s.MsgServer.CreateValidator(goCtx, create)
 }
